@@ -1,177 +1,271 @@
 <!DOCTYPE html>
 <html lang="es">
-<head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Visor de Lotes - San Miguel</title>
-  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
-  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
-  <style>
-    * { margin: 0; padding: 0; box-sizing: border-box; }
-    body, html { height: 100%; width: 100%; font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; }
-    #map { width: 100%; height: 100vh; position: relative; }
-    .loading-overlay {
-      position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%);
-      background: white; padding: 20px; border-radius: 10px;
-      box-shadow: 0 2px 10px rgba(0,0,0,0.2); z-index: 1000;
-      display: flex; align-items: center; gap: 10px;
-    }
-    .loading-spinner {
-      width: 30px; height: 30px; border: 3px solid #f3f3f3;
-      border-top: 3px solid #3498db; border-radius: 50%;
-      animation: spin 1s linear infinite;
-    }
-    @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
-    .error-message {
-      position: absolute; top: 20px; left: 50%; transform: translateX(-50%);
-      background: #ff6b6b; color: white; padding: 15px 20px; border-radius: 8px;
-      box-shadow: 0 2px 10px rgba(0,0,0,0.2); z-index: 1000; display: none;
-    }
-    .info-control {
-      background: white; padding: 10px; border-radius: 8px;
-      box-shadow: 0 1px 5px rgba(0,0,0,0.3); font-size: 14px;
-    }
-    .info-control h4 { margin: 0 0 5px 0; color: #333; }
-    .popup-content { min-width: 200px; }
-    .popup-content h3 { margin: 0 0 10px 0; color: #2c3e50; font-size: 16px; }
-    .popup-content p { margin: 5px 0; color: #555; font-size: 14px; }
-    .popup-content .label { font-weight: bold; color: #333; }
-  </style>
-</head>
-<body>
-  <div id="map">
-    <div class="loading-overlay" id="loading">
-      <div class="loading-spinner"></div>
-      <span>Cargando mapa...</span>
-    </div>
-    <div class="error-message" id="errorMessage"></div>
-  </div>
-
-  <script type="module">
-    import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
-
-    const SUPABASE_URL = "https://mgycehziecozyqzkwzmi.supabase.co";
-    const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im1neWNlaHppZWNvenlxemt3em1pIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTU0MDE5MTgsImV4cCI6MjA3MDk3NzkxOH0.HXPvsQJsCtiHsPodsyIFYkQxWRvQJqKbavqLoxE5w9o";
-    const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
-
-    let map;
-    let lotesLayer;
-    let bounds;
-
-    function mostrarError(mensaje) {
-      const errorDiv = document.getElementById('errorMessage');
-      errorDiv.textContent = mensaje;
-      errorDiv.style.display = 'block';
-      setTimeout(() => { errorDiv.style.display = 'none'; }, 5000);
-    }
-
-    function ocultarLoading() {
-      document.getElementById('loading').style.display = 'none';
-    }
-
-    function inicializarMapa() {
-      map = L.map('map').setView([-12.0775, -77.0936], 14);
-      L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
-        maxZoom: 19,
-        attribution: '© <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
-      }).addTo(map);
-      L.control.scale({ imperial: false, metric: true }).addTo(map);
-
-      const info = L.control({ position: 'topright' });
-      info.onAdd = function(map) {
-        const div = L.DomUtil.create('div', 'info-control');
-        div.innerHTML = '<h4>Visor de Lotes</h4><p>Haz clic en un lote para ver información</p>';
-        return div;
-      };
-      info.addTo(map);
-    }
-
-    function parseGeometry(geomData) {
-      if (typeof geomData === 'object' && geomData.type) return geomData;
-      if (typeof geomData === 'string') {
-        try { return JSON.parse(geomData); } 
-        catch (e) { console.error('Error parseando geometría:', e); return null; }
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Visor de Lotes - San Miguel</title>
+    <link
+      rel="stylesheet"
+      href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
+    />
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+    <style>
+      * {
+        margin: 0;
+        padding: 0;
+        box-sizing: border-box;
       }
-      return null;
-    }
-    
-//----------------------
-    async function cargarLotes() {
-  try {
-    console.log('Iniciando carga de lotes desde Supabase...');
-    const { data, error } = await supabase.from('v_lotes_geojson_4326_1').select('*');
-    if (error) throw error;
-
-    if (!data || data.length === 0) {
-      mostrarError('No se encontraron lotes en la base de datos');
-      ocultarLoading();
-      return;
-    }
-
-    console.log(`Se encontraron ${data.length} lotes`);
-
-    // ⚡️ Ahora cada fila tiene row.feature
-    const features = data.map((row, index) => {
-      return {
-        ...row.feature,
-        properties: {
-          ...row.feature.properties,
-          gid: row.feature.properties.id || index
+      body,
+      html {
+        height: 100%;
+        width: 100%;
+        font-family: "Segoe UI", Tahoma, Geneva, Verdana, sans-serif;
+      }
+      #map {
+        width: 100%;
+        height: 100vh;
+        position: relative;
+      }
+      .loading-overlay {
+        position: absolute;
+        top: 50%;
+        left: 50%;
+        transform: translate(-50%, -50%);
+        background: white;
+        padding: 20px;
+        border-radius: 10px;
+        box-shadow: 0 2px 10px rgba(0, 0, 0, 0.2);
+        z-index: 1000;
+        display: flex;
+        align-items: center;
+        gap: 10px;
+      }
+      .loading-spinner {
+        width: 30px;
+        height: 30px;
+        border: 3px solid #f3f3f3;
+        border-top: 3px solid #3498db;
+        border-radius: 50%;
+        animation: spin 1s linear infinite;
+      }
+      @keyframes spin {
+        0% {
+          transform: rotate(0deg);
         }
-      };
-    });
-
-    const geojsonData = { type: "FeatureCollection", features };
-
-    const estiloBase = { color: '#3498db', weight: 2, opacity: 0.8, fillColor: '#74b9ff', fillOpacity: 0.3 };
-    const estiloHover = { color: '#e74c3c', weight: 3, fillColor: '#ff7675', fillOpacity: 0.5 };
-
-    lotesLayer = L.geoJSON(geojsonData, {
-      style: estiloBase,
-      onEachFeature: function(feature, layer) {
-        let popupContent = '<div class="popup-content">';
-        popupContent += `<h3>Información del Lote</h3>`;
-        popupContent += `<p><span class="label">Lote:</span> ${feature.properties.nombre || feature.properties.lote}</p>`;
-        if (feature.properties.area) popupContent += `<p><span class="label">Área:</span> ${feature.properties.area} m²</p>`;
-        if (feature.properties.perimetro) popupContent += `<p><span class="label">Perímetro:</span> ${feature.properties.perimetro} m</p>`;
-        popupContent += '</div>';
-        layer.bindPopup(popupContent);
-        layer.on({
-          mouseover: function(e) { e.target.setStyle(estiloHover); e.target.bringToFront(); },
-          mouseout: function(e) { lotesLayer.resetStyle(e.target); },
-          click: function(e) { map.fitBounds(e.target.getBounds()); }
-        });
+        100% {
+          transform: rotate(360deg);
+        }
       }
-    }).addTo(map);
-
-    bounds = lotesLayer.getBounds();
-    map.fitBounds(bounds);
-    console.log('Lotes cargados exitosamente');
-    ocultarLoading();
-
-  } catch (err) {
-    console.error('Error al cargar lotes:', err.message);
-    mostrarError(err.message);
-    ocultarLoading();
-  }
-}
-//-------------------------------------------------
-    async function inicializar() {
-      try {
-        inicializarMapa();
-        await cargarLotes();
-      } catch (error) {
-        console.error('Error en la inicialización:', error);
-        mostrarError('Error al inicializar la aplicación');
-        ocultarLoading();
+      .error-message {
+        position: absolute;
+        top: 20px;
+        left: 50%;
+        transform: translateX(-50%);
+        background: #ff6b6b;
+        color: white;
+        padding: 15px 20px;
+        border-radius: 8px;
+        box-shadow: 0 2px 10px rgba(0, 0, 0, 0.2);
+        z-index: 1000;
+        display: none;
       }
-    }
+      .info-control {
+        background: white;
+        padding: 10px;
+        border-radius: 8px;
+        box-shadow: 0 1px 5px rgba(0, 0, 0, 0.3);
+        font-size: 14px;
+      }
+      .info-control h4 {
+        margin: 0 0 5px 0;
+        color: #333;
+      }
+      .popup-content {
+        min-width: 200px;
+      }
+      .popup-content h3 {
+        margin: 0 0 10px 0;
+        color: #2c3e50;
+        font-size: 16px;
+      }
+      .popup-content p {
+        margin: 5px 0;
+        color: #555;
+        font-size: 14px;
+      }
+      .popup-content .label {
+        font-weight: bold;
+        color: #333;
+      }
+      .lote-label {
+        font-size: 11px;
+        font-weight: bold;
+        color: #003366;
+        text-shadow: 1px 1px 2px white;
+        pointer-events: none; /* para que no bloquee el clic en el polígono */
+      }
+    </style>
+  </head>
+  <body>
+    <div id="map">
+      <div class="loading-overlay" id="loading">
+        <div class="loading-spinner"></div>
+        <span>Cargando mapa...</span>
+      </div>
+      <div class="error-message" id="errorMessage"></div>
+    </div>
 
-    if (document.readyState === 'loading') {
-      document.addEventListener('DOMContentLoaded', inicializar);
-    } else {
-      inicializar();
-    }
-  </script>
-</body>
+    <script type="module">
+      import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+
+      const SUPABASE_URL = "https://mgycehziecozyqzkwzmi.supabase.co";
+      const SUPABASE_ANON_KEY =
+        "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im1neWNlaHppZWNvenlxemt3em1pIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTU0MDE5MTgsImV4cCI6MjA3MDk3NzkxOH0.HXPvsQJsCtiHsPodsyIFYkQxWRvQJqKbavqLoxE5w9o";
+      const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+
+      let map;
+      let lotesLayer;
+      let bounds;
+
+      function mostrarError(mensaje) {
+        const errorDiv = document.getElementById("errorMessage");
+        errorDiv.textContent = mensaje;
+        errorDiv.style.display = "block";
+        setTimeout(() => {
+          errorDiv.style.display = "none";
+        }, 5000);
+      }
+
+      function ocultarLoading() {
+        document.getElementById("loading").style.display = "none";
+      }
+
+      function inicializarMapa() {
+        map = L.map("map").setView([-12.0775, -77.0936], 14);
+        L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
+          maxZoom: 19,
+          attribution:
+            '© <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors',
+        }).addTo(map);
+        L.control.scale({ imperial: false, metric: true }).addTo(map);
+
+        const info = L.control({ position: "topright" });
+        info.onAdd = function (map) {
+          const div = L.DomUtil.create("div", "info-control");
+          div.innerHTML =
+            "<h4>Visor de Lotes</h4><p>Haz clic en un lote para ver información</p>";
+          return div;
+        };
+        info.addTo(map);
+      }
+
+      function parseGeometry(geomData) {
+        if (typeof geomData === "object" && geomData.type) return geomData;
+        if (typeof geomData === "string") {
+          try {
+            return JSON.parse(geomData);
+          } catch (e) {
+            console.error("Error parseando geometría:", e);
+            return null;
+          }
+        }
+        return null;
+      }
+
+      //----------------------
+      async function cargarLotes() {
+        try {
+          console.log("Iniciando carga de lotes desde Supabase...");
+
+          const { data, error } = await supabase
+            .from("v_lotes_geojson_4326_fc")
+            .select("geojson")
+            .single();
+
+          if (error) throw error;
+
+          if (!data || data.length === 0) {
+            mostrarError("No se encontraron lotes en la base de datos");
+            ocultarLoading();
+            return;
+          }
+          console.log("FeatureCollection recibida de Supabase:", data.geojson);
+
+          const geojsonData = data.geojson;
+
+          const estiloBase = {
+            color: "#3498db",
+            weight: 2,
+            opacity: 0.8,
+            fillColor: "#74b9ff",
+            fillOpacity: 0.3,
+          };
+          const estiloHover = {
+            color: "#e74c3c",
+            weight: 3,
+            fillColor: "#ff7675",
+            fillOpacity: 0.5,
+          };
+
+          lotesLayer = L.geoJSON(geojsonData, {
+            style: estiloBase,
+            onEachFeature: function (feature, layer) {
+              let popupContent = '<div class="popup-content">';
+              popupContent += `<h3>Información del Lote</h3>`;
+              // 🔹 Opción 2: Mostrar TODAS las propiedades dinámicamente
+              const orden = ["gid", "lotecat", "manzana", "hab_urb"];
+
+              orden.forEach((key) => {
+                if (feature.properties[key] !== undefined) {
+                  popupContent += `<p><span class="label">${key}:</span> ${feature.properties[key]}</p>`;
+                }
+              });
+
+              popupContent += "</div>";
+              layer.bindPopup(popupContent);
+
+              layer.on({
+                mouseover: function (e) {
+                  e.target.setStyle(estiloHover);
+                  e.target.bringToFront();
+                },
+                mouseout: function (e) {
+                  lotesLayer.resetStyle(e.target);
+                },
+                click: function (e) {
+                  map.fitBounds(e.target.getBounds());
+                },
+              });
+            },
+          }).addTo(map);
+
+          bounds = lotesLayer.getBounds();
+          map.fitBounds(bounds);
+          console.log("Lotes cargados exitosamente");
+          ocultarLoading();
+        } catch (err) {
+          console.error("Error al cargar lotes:", err.message);
+          mostrarError(err.message);
+          ocultarLoading();
+        }
+      }
+      //-------------------------------------------------
+      async function inicializar() {
+        try {
+          inicializarMapa();
+          await cargarLotes();
+        } catch (error) {
+          console.error("Error en la inicialización:", error);
+          mostrarError("Error al inicializar la aplicación");
+          ocultarLoading();
+        }
+      }
+
+      if (document.readyState === "loading") {
+        document.addEventListener("DOMContentLoaded", inicializar);
+      } else {
+        inicializar();
+      }
+    </script>
+  </body>
 </html>
